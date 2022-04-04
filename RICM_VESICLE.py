@@ -295,68 +295,52 @@ class RICM(Height_map):
     # Display the way to the RICM height mapping step by step
     def show_summary(self, name='summary', save=False):
         
-        plt.figure(figsize=(23,7))
+        plt.figure(figsize=(20,8))
 
-        plt.subplot(251)
+        plt.subplot(241)
         plt.axis('off')
         plt.title('Orginal image')
         plt.imshow(self.img, cmap = "gray")
         plt.colorbar()
 
-        plt.subplot(252)
+        plt.subplot(242)
         plt.axis('off')
         plt.title('Denoised image')
         plt.imshow(RICM.nl_denoise(self) , cmap = 'gray')
         plt.colorbar()
 
-        plt.subplot(253)
+        plt.subplot(243)
         plt.axis('off')
         plt.title('Edge detected image')
         plt.imshow(RICM.edge_detection(self) , cmap = 'gray')
         plt.colorbar();
 
-        plt.subplot(254)
+        plt.subplot(244)
+        plt.title('Orginal histogram')
+        plt.hist(self.img.ravel(), bins = 200)
+        plt.grid();
+        
+        plt.subplot(245)
         plt.axis('off')
         plt.title('Masked image')
         plt.imshow(RICM.mask(self) , cmap = 'gray')
         plt.colorbar();
 
-        plt.subplot(255)
+        plt.subplot(246)
         plt.axis('off')
         plt.title('Background fitted image')
         plt.imshow(RICM.background_fitting(self) , cmap = 'gray')
         plt.colorbar();
 
-        plt.subplot(256)
+        plt.subplot(247)
         plt.axis('off')
         plt.title('Corrected image')
         plt.imshow(RICM.correct(self) , cmap = 'gray')
         plt.colorbar()
-
-        plt.subplot(257)
-        plt.axis('off')
-        plt.title('Background normalized image')
-        plt.imshow(RICM.background_normalization(self) , cmap = 'gray')
-        plt.colorbar()
         
-        # Show the argument of the arccosine to make sure it's between 1 and -1
-        plt.subplot(258)
-        plt.axis('off')
-        plt.title('Arccosine argument image')
-        plt.imshow(RICM.height_argument(self) , cmap = 'inferno')
-        plt.colorbar();
-        
-        plt.subplot(259)
-        plt.axis('off')
-        plt.title('Height image')
-        plt.imshow(RICM.height(self) , cmap = 'inferno')
-        plt.colorbar()
-        
-        plt.subplot(2,5,10)
-        plt.title('Height histogram')
-        plt.xlabel('$h_{[nm]}$')
-        #plt.ylabel('Frequency')
-        plt.hist(RICM.height(self).ravel(), bins = 200)
+        plt.subplot(248)
+        plt.title('Corrected histogram')
+        plt.hist(RICM.correct(self).ravel(), bins = 200)
         plt.grid();
         
         # Save the image
@@ -365,4 +349,85 @@ class RICM(Height_map):
 
         # Show the results
         plt.show()
+
+
+class Growth_Area():
+    
+    def __init__(self, movie, background=None,
+                 denoise=False, nl_fast_mode=True, nl_patch_size=10, nl_patch_distance=1, 
+                 consecute=None, keep_dim =True, show_dim=True):
+       
+        # Parameters
+        self.movie      = movie
+        self.background = background
         
+        # Denoising parameters
+        self.denoise           = denoise
+        self.nl_fast_mode      = nl_fast_mode
+        self.nl_patch_size     = nl_patch_size
+        self.nl_patch_distance = nl_patch_distance
+        
+        # Consecuting parameters
+        self.consecute = consecute
+        self.keep_dim  = keep_dim
+        self.show_dim  = show_dim
+
+    # Normalized reflactance for 5 interfaces
+    def consecuted_movie(self):
+        
+        # Average each consecute frames
+        movie_consecuted = []
+        if self.keep_dim:
+            for i in range(int(self.movie.shape[0]-self.movie.shape[0]%self.consecute-self.consecute)):
+                movie_consecuted.append(np.mean(self.movie[i:i+self.consecute], axis=0))
+        else:
+            for i in np.arange(int(self.movie.shape[0]-self.movie.shape[0]%self.consecute), step=self.consecute):
+                movie_consecuted.append(np.mean(self.movie[i:i+self.consecute], axis=0))
+        
+        # Transform the movie into numpy array
+        movie_consecuted = np.array(movie_consecuted)
+        
+        # Show the dimension reduction
+        if self.show_dim:
+            print(f"{self.movie.shape} --> {movie_consecuted.shape}")
+        
+        return movie_consecuted
+
+    def area_curve(self):
+
+        # Background correction of the movie
+        if self.background is None:
+            background_correction = 0
+        else: background_correction = self.background.mean()-self.background
+
+        # Consicutive denoising of the movie
+        movie_consecuted = Growth_Area.consecuted_movie(self) if self.consecute != None else self.movie
+
+        # Non local denoising of the movie
+        if self.denoise:
+
+            # Estimating the noise variance of the image
+            sigma_est = np.mean(restoration.estimate_sigma(movie_consecuted[-1]))
+
+            # Get the area of each frame in the averaged movie
+            movie_corrected = []
+            for img in movie_consecuted:
+
+                # Apply the Non-local means denoising algorithm on the background corrected image
+                img_corrected = restoration.denoise_nl_means(img + background_correction,
+                                                            h = sigma_est,
+                                                            fast_mode = self.nl_fast_mode,
+                                                            patch_size = self.nl_patch_size,
+                                                            patch_distance = self.nl_patch_distance)
+
+                # Corrected movie
+                movie_corrected.append(img_corrected)
+
+            movie_corrected = np.array(movie_corrected)
+
+        else: movie_corrected = movie_consecuted + background_correction
+
+        # Compute the area
+        area = np.array([(1-np.multiply(img > filters.threshold_otsu(img), 1)).sum() for img in movie_corrected])
+
+        return area
