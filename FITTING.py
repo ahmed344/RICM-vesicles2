@@ -5,7 +5,7 @@ from scipy.optimize import curve_fit
 
 class Fit_Gaussian():
     
-    def __init__(self, data, normalized = False):
+    def __init__(self, data, normalized=False):
         
         self.data = data                     # The image to the Gaussian on.
         self.normalized = normalized       # Using normalized Gaussian. 
@@ -19,7 +19,7 @@ class Fit_Gaussian():
         return (1/np.sqrt(2 * np.pi * sigma**2)) * np.exp(-(x - x0)**2 / (2 * sigma**2))
 
     # Fit a gaussian on a histogram
-    def hist_fitting(self, bins = 200, show = False):
+    def hist_fitting(self, bins=200, show=False):
         """Get a gaussian fitting of a histogram.
         Parameter:
             data - as numpy array
@@ -29,10 +29,10 @@ class Fit_Gaussian():
             X0, sigma - of the normalized histogram gaussian
         """
         # Make a histogram
-        if self.normalized == True:
-            n, bins_ = np.histogram(self.data, bins=bins, density = True)
+        if self.normalized:
+            n, bins_ = np.histogram(self.data[np.isfinite(self.data)], bins=bins, density=True)
         else:
-            n, bins_ = np.histogram(self.data, bins=bins)
+            n, bins_ = np.histogram(self.data[np.isfinite(self.data)], bins=bins)
 
 
         # Data
@@ -40,27 +40,27 @@ class Fit_Gaussian():
         y = n
 
         # Apply the fitting 
-        if self.normalized == True:
+        if self.normalized:
             popt,pcov = curve_fit(Fit_Gaussian.Gauss_normalized, x, y,
-                                  p0 = (x.max()/2, x.max()/3),
-                                  bounds = (0, [x.max(), x.max()/2]))
+                                  p0 = ((x.max()+x.min())/2, (x.max()-x.min())/3),
+                                  bounds = ([x.min(), 0], [x.max(), (x.max()-x.min())/2]))
         else:
             popt,pcov = curve_fit(Fit_Gaussian.Gauss, x, y,
-                                  p0 = (x.max()/2, x.max()/3, 0, 1/np.sqrt(2 * np.pi * (x.max()/3)**2)),
-                                  bounds = (0, [x.max(), x.max()/2, np.inf, np.inf]))            
+                                  p0=((x.max()+x.min())/2, (x.max()-x.min())/3, 0, 1/np.sqrt(2 * np.pi * (x.max()/3)**2)),
+                                  bounds=([x.min(), 0, -np.inf, -np.inf] [x.max(), (x.max()-x.min())/2, np.inf, np.inf]))            
 
         # Display the results
-        if show == True:
+        if show:
             plt.figure(figsize=(8,5))
             
-            if self.normalized == True:
-                plt.plot(x, Fit_Gaussian.Gauss_normalized(x, *popt), 'r-',
+            if self.normalized:
+                plt.plot(x, Fit_Gaussian.Gauss_normalized(x, *popt), 'r-', alpha = 0.6,
                          label='Gauss: $x_0$ = {:.4f}, $\sigma$ = {:.4f}'.format(*popt))
             else:
-                plt.plot(x, Fit_Gaussian.Gauss(x, *popt), 'r-',
+                plt.plot(x, Fit_Gaussian.Gauss(x, *popt), 'r-', alpha = 0.6,
                          label='Gauss: $x_0$ = {:.4f}, $\sigma$ = {:.4f}, $Y_0$ = {:.4f}, A = {:.4f}'.format(*popt))
             
-            plt.plot(x, y, 'b+:', label='data')            
+            plt.plot(x, y, 'b+:', alpha = 0.4, label='data')            
             plt.legend()
             plt.title('Histogram Gaussian')
             plt.xlabel('value')
@@ -72,7 +72,7 @@ class Fit_Gaussian():
 
 class Fit_2D_Gaussian():
     
-    def __init__(self, img, normalized = False, symmetric = False):
+    def __init__(self, img, normalized=False, symmetric=False):
         
         self.img = img                     # The image to the Gaussian on.
         self.normalized = normalized       # Using normalized Gaussian. 
@@ -143,9 +143,9 @@ class Fit_2D_Gaussian():
         x, y = np.meshgrid(np.linspace(0, self.img.shape[1], self.img.shape[1]),
                            np.linspace(0, self.img.shape[0], self.img.shape[0]))
 
-        if self.normalized == True:
+        if self.normalized:
 
-            if self.symmetric == True:
+            if self.symmetric:
                 # Fit the Gaussian
                 popt, pcov = curve_fit(Fit_2D_Gaussian.gaussian_2D_normalized_symmetric, img_mesh, self.img.ravel(),
                                        p0=(self.img.shape[1]/2, self.img.shape[0]/2, self.img.shape[1]/2),
@@ -186,7 +186,7 @@ class Fit_2D_Gaussian():
 
         else:
 
-            if self.symmetric == True:
+            if self.symmetric:
                 # Fit the Gaussian
                 popt, pcov = curve_fit(Fit_2D_Gaussian.gaussian_2D_symmetric, img_mesh, self.img.ravel(),
                                        p0=(self.img.shape[1]/2, self.img.shape[0]/2, self.img.shape[1]/2,1,0),

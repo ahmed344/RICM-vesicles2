@@ -1,10 +1,9 @@
-#! /home/ahmed/anaconda3/bin/python
-
 # Libraries
 import numpy as np
 import matplotlib.pyplot as plt
-from skimage import restoration, filters
+from skimage import restoration, filters, morphology
 from scipy import ndimage, linalg, optimize
+from FITTING import Fit_Gaussian
 
 
 class Height_map():
@@ -17,23 +16,23 @@ class Height_map():
                  n_inner = 1.344,
                  d_water = 1,
                  d_lipid = 4,
-                 l = 546):
+                 l       = 546,
+                 p       = 0):
        
         # Parameters
-        self.n_glass = n_glass      #refractive index of glass 
-        self.n_water = n_water      #refractive index of water
-        self.n_outer = n_outer      #refractive index of outer solution (PBS)
-        self.n_lipid = n_lipid      #refractive index of lipid
-        self.n_inner = n_inner      #refractive index of inner buffer (Sucrose)
-        
-        self.d_water = d_water      #thikness of water in nm
-        self.d_lipid = d_lipid      #thikness of lipid in nm
-        
-        self.l = l                  #wave length of the RICM light in nm
+        self.n_glass = n_glass      # refractive index of glass 
+        self.n_water = n_water      # refractive index of water
+        self.n_outer = n_outer      # refractive index of outer solution (PBS)
+        self.n_lipid = n_lipid      # refractive index of lipid
+        self.n_inner = n_inner      # refractive index of inner buffer (Sucrose)
+        self.d_water = d_water      # thikness of water in nm
+        self.d_lipid = d_lipid      # thikness of lipid in nm
+        self.l       = l            # wave length of the RICM light in nm
+        self.p       = p            # phase shift of the cosine function
         
 
     # Normalized reflactance for 5 interfaces
-    def R5_norm(self, h):
+    def i5_norm(self, h):
 
         # Wave vector
         k = (2 * np.pi) / self.l
@@ -47,85 +46,44 @@ class Height_map():
         n5 = self.n_inner    # Inner buffer Sucrose
 
         # Fresnel reflection coefficients
-        r01 = (n0 - n1) / (n0 + n1)
-        r12 = (n1 - n2) / (n1 + n2)
-        r23 = (n2 - n3) / (n2 + n3)
-        r34 = (n3 - n4) / (n3 + n4)
-        r45 = (n4 - n5) / (n4 + n5)
+        r01 = (n0-n1) / (n0+n1)
+        r12 = (n1-n2) / (n1+n2)
+        r23 = (n2-n3) / (n2+n3)
+        r34 = (n3-n4) / (n3+n4)
+        r45 = (n4-n5) / (n4+n5)
 
         # Distances traveled by light
         D1 = 2 * n1 * self.d_water
         D2 = 2 * n2 * self.d_lipid
         D3 = 2 * n3 * h
         D4 = 2 * n4 * self.d_lipid  
-
+        
+        # Effective reflection coefficient
+        R1 = r01
+        R2 = ((1-r01**2) * np.exp(-1j*k*D1)) * r12
+        R3 = ((1-r01**2)*(1-r12**2) * np.exp(-1j*k*(D1+D2))) * r23
+        R4 = ((1-r01**2)*(1-r12**2)*(1-r23**2) * np.exp(-1j*k*(D1+D2+D3))) * r34
+        R5 = ((1-r01**2)*(1-r12**2)*(1-r23**2)*(1-r34**2) * np.exp(-1j*k*(D1+D2+D3+D4))) * r45
+        
         # Effective reflection coefficient of the adhesion zone
-        R = r01 + ((1-r01**2) * np.exp(-1j*k*D1)) * r12 + ((1-r01**2)*(1-r12**2) * np.exp(-1j*k*(D1+D2))) * r23 + ((1-r01**2)*(1-r12**2)*(1-r23**2) * np.exp(-1j*k*(D1+D2+D3))) * r34 + ((1-r01**2)*(1-r12**2)*(1-r23**2)*(1-r34**2) * np.exp(-1j*k*(D1+D2+D3+D4))) * r45
+        R = R1 + R2 + R3 + R4 + R5
 
         # Effective reflection coefficient of the background
-        R_b = r01 + ((1-r01**2) * np.exp(-1j*k*D1)) * r12 + ((1-r01**2)*(1-r12**2) * np.exp(-1j*k*(D1 + D2))) * r23
+        R_b = R1 + R2 + R3
 
         # Normalized reflactance R_norm
         R_norm = (np.abs(R * np.conjugate(R)) - np.abs(R_b * np.conjugate(R_b))) / np.abs(R_b * np.conjugate(R_b))
 
         return R_norm
+
     
-    # Normalized reflactance for 5 interfaces
-    def R5_norm_old(self, h):
-
-        # Wave vector
-        k = 2 * np.pi / self.l
-
-        # distance
-        d = np.array([1, self.d_water, self.d_lipid, h, self.d_lipid])
-
-        # Refractive indices
-        n = np.array([self.n_glass, self.n_water, self.n_lipid, self.n_outer, self.n_lipid, self.n_inner])
-
-        # Distance traveled by the lite 
-        D = np.array([2 * n[i] * d[i] for i in range(len(d))])
-
-        # Fresnel reflection coefficient
-        r = np.array([(n[i] - n[i+1]) / (n[i] + n[i+1]) for i in range(len(n)-1)])
-
-        # Reflactance R
-        P = np.array([
-            1,
-            (1-r[0]**2) * np.exp(-1J * k * D[1]),
-            (1-r[0]**2)*(1-r[1]**2) * np.exp(-1J * k * (D[1]+D[2])),
-            (1-r[0]**2)*(1-r[1]**2)*(1-r[2]**2) * np.exp(-1J * k * (D[1]+D[2]+D[3])),
-            (1-r[0]**2)*(1-r[1]**2)*(1-r[2]**2)*(1-r[3]**2) * np.exp(-1J * k * (D[1]+D[2]+D[3]+D[4]))
-        ])
-
-        R = np.sum(P * r)
-        
-        # Take it's real absolute value
-        R = np.abs(R * np.conjugate(R))
-
-        # Reflactance R_background
-        P_background = np.array([
-            1,
-            (1-r[0]**2) * np.exp(-1J * k * D[1]),
-            (1-r[0]**2)*(1-r[1]**2) * np.exp(-1J * k * (D[1]+D[2]))
-        ])
-
-        r_background = np.array([r[0], r[1], r[2]])
-
-        R_background = np.sum(P_background * r_background)
-        
-        # Take it's real absolute value
-        R_background = np.abs(R_background * np.conjugate(R_background))
-
-        return (R - R_background) / R_background
-
-
     # The dependence of the normalized intensity on hight
     def normalized_intensity(self, h, Y0, A, h0):
         
         n_outer = self.n_outer  #refractive index of PBS
         l = self.l              #wave length of the RICM light
 
-        return Y0 - A * np.cos((4 * np.pi * n_outer / l) * (h - h0))
+        return Y0 - A * np.cos((4 * np.pi * n_outer / l) * (h - h0) + 2*np.pi*self.p)
     
 
 
@@ -133,21 +91,36 @@ class RICM(Height_map):
     
     def __init__(self,
                  img,
-                 denoise = True, nl_fast_mode = True, nl_patch_size = 10, nl_patch_distance = 10,
-                 hole = 3,
-                 n_glass = 1.525, n_water = 1.33, n_outer = 1.33, n_lipid = 1.486, n_inner = 1.38,
-                 d_water = 1, d_lipid = 4, l = 546):
+                 denoise=True, nl_fast_mode=True, nl_patch_size=10, nl_patch_distance=1,
+                 hole=3, remove_small=True, min_size=64,
+                 n_glass=1.525, n_water=1.333, n_outer=1.335, n_lipid=1.486, n_inner=1.344,
+                 d_water=1, d_lipid=4, l=546, p=0):
         
-        Height_map.__init__(self,
-                            n_glass = 1.525, n_water = 1.33, n_outer = 1.33, n_lipid = 1.486, n_inner = 1.38,
-                            d_water = 1, d_lipid = 4, l = 546)
-        
+        # The image
         self.img = img
+        
+        # RICM parameters
+        self.n_glass = n_glass      # refractive index of glass 
+        self.n_water = n_water      # refractive index of water
+        self.n_outer = n_outer      # refractive index of outer solution (PBS)
+        self.n_lipid = n_lipid      # refractive index of lipid
+        self.n_inner = n_inner      # refractive index of inner buffer (Sucrose)
+        self.d_water = d_water      # thikness of water in nm
+        self.d_lipid = d_lipid      # thikness of lipid in nm
+        self.l = l                  # wave length of the RICM light in nm
+        self.p = p                  # phase shift of the cosine function
+
+        # Denoising parameters
         self.denoise = denoise
         self.nl_fast_mode = nl_fast_mode
         self.nl_patch_size = nl_patch_size
         self.nl_patch_distance = nl_patch_distance
-        self.hole = hole
+        
+        # Mask parameters
+        self.hole = hole                     # hole filling kernel
+        self.remove_small = remove_small     # remove small defects
+        self.min_size = min_size             # minimum size for a small defect
+        
         
     # Denoise the image using Non-local means denoising algorithm
     def nl_denoise(self):
@@ -167,7 +140,7 @@ class RICM(Height_map):
     # Detecting the edges
     def edge_detection(self):
         
-        if self.denoise == True:
+        if self.denoise:
             #Apply the Non-local means denoising algorithm
             img_denoised = RICM.nl_denoise(self)
 
@@ -179,6 +152,7 @@ class RICM(Height_map):
 
         return edge
 
+    
     # Determine the contact zone by filling the closed edges inside the binary image of the edges
     def mask(self):
 
@@ -190,8 +164,14 @@ class RICM(Height_map):
 
         # Making a binary image with 0 and 1 values
         edge_binary = np.multiply(edge > edge_threshold, 1)
+        
+        # Fill the detected edge
+        mask = ndimage.binary_fill_holes(edge_binary, structure=np.ones((self.hole, self.hole)))
+        
+        # Remove the small objects
+        if self.remove_small: mask = morphology.remove_small_objects(mask, min_size=self.min_size)
 
-        return ndimage.binary_fill_holes(edge_binary, structure=np.ones((self.hole, self.hole)))
+        return mask
 
 
     # Fitting the background
@@ -236,6 +216,7 @@ class RICM(Height_map):
 
         return self.img - Background + avg_background
 
+    
     # Normalized reflactance to the background
     def background_normalization(self):
 
@@ -252,38 +233,136 @@ class RICM(Height_map):
                 if edge_binary_filled[i, j] == False:  # excluding the contact zone
                     background_corrected_intensities.append(img_corrected[i,j])
 
-        # Take the average of the corrected bacground
-        avg_corrected_background = np.average(background_corrected_intensities)
+        # Transform the corrected bacground into array
+        background_corrected_intensities = np.array(background_corrected_intensities)
+        
+        # Fit a gaussian on the corrected_background histogram then take it's mean
+        gauss = Fit_Gaussian(background_corrected_intensities, normalized=True)
+        avg_corrected_background, _ = gauss.hist_fitting()
 
         return (img_corrected - avg_corrected_background) / avg_corrected_background
     
     
     # RICM height mapping
-    def height(self, h = np.linspace(1, 600, 600)):
+    def height(self, h=np.linspace(1, 600, 600)):
         
         # Normalized reflactance to the background
-        img_background_normalized =  RICM.background_normalization(self)
+        img_normalized =  RICM.background_normalization(self)
         
 
         # Fit the parameters Y_0, A, h_0 of the cosine function
-        mapping = Height_map()
-        popt, pcov = optimize.curve_fit(mapping.normalized_intensity, h, mapping.R5_norm(h))
+        mapping = Height_map(n_glass = self.n_glass,
+                             n_water = self.n_water,
+                             n_outer = self.n_outer,
+                             n_lipid = self.n_lipid,
+                             n_inner = self.n_inner,
+                             d_water = self.d_water,
+                             d_lipid = self.d_lipid,
+                             l       = self.l,
+                             p       = self.p)
+        
+        popt, pcov = optimize.curve_fit(mapping.normalized_intensity, h, mapping.i5_norm(h))
         Y0, A, h0 = popt
         print('Y0 = {:.2f}, A = {:.2f}, h0 = {:.2f}'.format(*popt))
 
-        return (self.l / (4 * np.pi * self.n_outer)) * np.arccos((Y0 - img_background_normalized) / A) + h0    
+        return (self.l/(4*np.pi*self.n_outer)) * (np.arccos((Y0-img_normalized)/A) - 2*np.pi*self.p) + h0    
+    
     
     # RICM height mapping argument
-    def height_argument(self, h = np.linspace(1, 600, 600)):
+    def height_argument(self, h=np.linspace(1, 600, 600)):
         
         # Normalized reflactance to the background
-        img_background_normalized =  RICM.background_normalization(self)
+        img_normalized =  RICM.background_normalization(self)
         
 
         # Fit the parameters Y_0, A, h_0 of the cosine function
-        mapping = Height_map()
-        popt, pcov = optimize.curve_fit(mapping.normalized_intensity, h, mapping.R5_norm(h))
+        mapping = Height_map(n_glass = self.n_glass,
+                             n_water = self.n_water,
+                             n_outer = self.n_outer,
+                             n_lipid = self.n_lipid,
+                             n_inner = self.n_inner,
+                             d_water = self.d_water,
+                             d_lipid = self.d_lipid,
+                             l       = self.l,
+                             p       = self.p)
+        
+        popt, pcov = optimize.curve_fit(mapping.normalized_intensity, h, mapping.i5_norm(h))
         Y0, A, h0 = popt
-        print('Y0 = {:.2f}, A = {:.2f}, h0 = {:.2f}'.format(*popt))
 
-        return (Y0 - img_background_normalized) / A
+        return (Y0-img_normalized)/A 
+    
+    
+    # Display the way to the RICM height mapping step by step
+    def show_summary(self, name='summary', save=False):
+        
+        plt.figure(figsize=(23,7))
+
+        plt.subplot(251)
+        plt.axis('off')
+        plt.title('Orginal image')
+        plt.imshow(self.img, cmap = "gray")
+        plt.colorbar()
+
+        plt.subplot(252)
+        plt.axis('off')
+        plt.title('Denoised image')
+        plt.imshow(RICM.nl_denoise(self) , cmap = 'gray')
+        plt.colorbar()
+
+        plt.subplot(253)
+        plt.axis('off')
+        plt.title('Edge detected image')
+        plt.imshow(RICM.edge_detection(self) , cmap = 'gray')
+        plt.colorbar();
+
+        plt.subplot(254)
+        plt.axis('off')
+        plt.title('Masked image')
+        plt.imshow(RICM.mask(self) , cmap = 'gray')
+        plt.colorbar();
+
+        plt.subplot(255)
+        plt.axis('off')
+        plt.title('Background fitted image')
+        plt.imshow(RICM.background_fitting(self) , cmap = 'gray')
+        plt.colorbar();
+
+        plt.subplot(256)
+        plt.axis('off')
+        plt.title('Corrected image')
+        plt.imshow(RICM.correct(self) , cmap = 'gray')
+        plt.colorbar()
+
+        plt.subplot(257)
+        plt.axis('off')
+        plt.title('Background normalized image')
+        plt.imshow(RICM.background_normalization(self) , cmap = 'gray')
+        plt.colorbar()
+        
+        # Show the argument of the arccosine to make sure it's between 1 and -1
+        plt.subplot(258)
+        plt.axis('off')
+        plt.title('Arccosine argument image')
+        plt.imshow(RICM.height_argument(self) , cmap = 'inferno')
+        plt.colorbar();
+        
+        plt.subplot(259)
+        plt.axis('off')
+        plt.title('Height image')
+        plt.imshow(RICM.height(self) , cmap = 'inferno')
+        plt.colorbar()
+        
+        plt.subplot(2,5,10)
+        plt.title('Height histogram')
+        plt.xlabel('$h_{[nm]}$')
+        #plt.ylabel('Frequency')
+        plt.hist(RICM.height(self).ravel(), bins = 200)
+        plt.grid();
+        
+        # Save the image
+        if save or name!='summary':
+            plt.savefig(name)
+
+        # Show the results
+        plt.show()
+        
