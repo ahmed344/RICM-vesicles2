@@ -353,13 +353,14 @@ class RICM(Height_map):
 
 class Growth_Area():
     
-    def __init__(self, movie, background=None,
+    def __init__(self, movie, background=None, static_threshold=False,
                  denoise=False, nl_fast_mode=True, nl_patch_size=10, nl_patch_distance=1, 
                  consecute=None, keep_dim =True, show_dim=True):
        
         # Parameters
-        self.movie      = movie
-        self.background = background
+        self.movie            = movie
+        self.background       = background
+        self.static_threshold = static_threshold
         
         # Denoising parameters
         self.denoise           = denoise
@@ -426,8 +427,16 @@ class Growth_Area():
             movie_corrected = np.array(movie_corrected)
 
         else: movie_corrected = movie_consecuted + background_correction
+        
+        
+        if self.static_threshold:
+            # Compute the threshold
+            threshold = filters.threshold_otsu(movie_corrected[-20:-1].mean(axis = 0))
 
-        # Compute the area
-        area = np.array([(1-np.multiply(img > filters.threshold_otsu(img), 1)).sum() for img in movie_corrected])
+            # Compute the area
+            area = np.array([(1-np.multiply(img > threshold, 1)).sum() for img in movie_corrected])
+        else:
+            # Compute the area
+            area = np.array([(1-np.multiply(img > filters.threshold_otsu(img), 1)).sum() for img in movie_corrected])
 
         return area
