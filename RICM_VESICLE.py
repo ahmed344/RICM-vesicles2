@@ -124,33 +124,24 @@ class RICM(Height_map):
         
     # Denoise the image using Non-local means denoising algorithm
     def nl_denoise(self):
-
-        #Estimating the noise variance of the image
-        sigma_est = np.mean(restoration.estimate_sigma(self.img))
-
-        #Apply the Non-local means denoising algorithm
-        img_denoised = restoration.denoise_nl_means(self.img,
-                                                    h = sigma_est,
-                                                    fast_mode = self.nl_fast_mode,
-                                                    patch_size = self.nl_patch_size,
-                                                    patch_distance = self.nl_patch_distance)
-        return img_denoised
+        # Apply the Non-local means denoising algorithm and return the denoised image
+        return restoration.denoise_nl_means(self.img,
+                                            h = np.mean(restoration.estimate_sigma(self.img)),
+                                            fast_mode = self.nl_fast_mode,
+                                            patch_size = self.nl_patch_size,
+                                            patch_distance = self.nl_patch_distance)
+        
 
 
     # Detecting the edges
     def edge_detection(self):
-        
+        # Check if denoising is True
         if self.denoise:
-            #Apply the Non-local means denoising algorithm
-            img_denoised = RICM.nl_denoise(self)
-
-            #Applying some edge operators to the denoised image
-            edge = filters.sobel(img_denoised)
+            # Return the edge of the denoised image
+            return filters.sobel(RICM.nl_denoise(self))
         else:
-            #Applying some edge operators to the original image
-            edge = filters.sobel(self.img)
-
-        return edge
+            # Return the edge of the original image
+            return filters.sobel(self.img)
 
     
     # Determine the contact zone by filling the closed edges inside the binary image of the edges
@@ -158,20 +149,19 @@ class RICM(Height_map):
 
         #Applying some edge operators to the denoised image
         edge = RICM.edge_detection(self)
-
-        # Getting the threshold of edge filtered image
-        edge_threshold = filters.threshold_otsu(edge)
-
-        # Making a binary image with 0 and 1 values
-        edge_binary = np.multiply(edge > edge_threshold, 1)
         
-        # Fill the detected edge
-        mask = ndimage.binary_fill_holes(edge_binary, structure=np.ones((self.hole, self.hole)))
+        # 1- Getting the threshold of edge filtered image
+        # 2- Making a binary image with 0 and 1 values
+        # 3- Fill the detected edge
+        # 4- Remove the small objects in case of remove small is True
         
-        # Remove the small objects
-        if self.remove_small: mask = morphology.remove_small_objects(mask, min_size=self.min_size)
+        if self.remove_small: 
+            return morphology.remove_small_objects(ndimage.binary_fill_holes(np.multiply(edge > filters.threshold_otsu(edge), 1),
+                                                                             structure=np.ones((self.hole, self.hole))),
+                                                   min_size=self.min_size)
 
-        return mask
+        return ndimage.binary_fill_holes(np.multiply(edge > filters.threshold_otsu(edge), 1),
+                                         structure=np.ones((self.hole, self.hole)))
 
 
     # Fitting the background
@@ -210,35 +200,25 @@ class RICM(Height_map):
 
         # Fitting the background
         Background = RICM.background_fitting(self)
-
-        # Take the average of the bacground
-        avg_background = np.average(Background)
-
-        return self.img - Background + avg_background
+        
+        # Return the corrected image
+        return self.img - Background + np.average(Background)
 
     
     # Normalized reflactance to the background
     def background_normalization(self):
 
-        # Determine the contact zone
-        edge_binary_filled = RICM.mask(self)
-
         # Get the corrected image
         img_corrected = RICM.correct(self)
 
-        # Get the background average of the corrected image
-        background_corrected_intensities = []
-        for i in range(self.img.shape[0]):
-            for j in range(self.img.shape[1]):
-                if edge_binary_filled[i, j] == False:  # excluding the contact zone
-                    background_corrected_intensities.append(img_corrected[i,j])
+        # Get the background by removing the contact zone from the corrected image
+        corrected_background = img_corrected * (1 - RICM.mask(self))
 
-        # Transform the corrected bacground into array
-        background_corrected_intensities = np.array(background_corrected_intensities)
+        # Transform it into a histogram excluding the contact zone
+        corrected_background = corrected_background[corrected_background != 0].ravel()
         
-        # Fit a gaussian on the corrected_background histogram then take it's mean
-        gauss = Fit_Gaussian(background_corrected_intensities, normalized=True)
-        avg_corrected_background, _ = gauss.hist_fitting()
+        # Fit a gaussian on the corrected background histogram then take it's mean
+        avg_corrected_background, _ = Fit_Gaussian(corrected_background, normalized=True).hist_fitting()
 
         return (img_corrected - avg_corrected_background) / avg_corrected_background
     
@@ -246,10 +226,6 @@ class RICM(Height_map):
     # RICM height mapping
     def height(self, h=np.linspace(1, 600, 600)):
         
-        # Normalized reflactance to the background
-        img_normalized =  RICM.background_normalization(self)
-        
-
         # Fit the parameters Y_0, A, h_0 of the cosine function
         mapping = Height_map(n_glass = self.n_glass,
                              n_water = self.n_water,
@@ -261,19 +237,15 @@ class RICM(Height_map):
                              l       = self.l,
                              p       = self.p)
         
-        popt, pcov = optimize.curve_fit(mapping.normalized_intensity, h, mapping.i5_norm(h))
+        popt, _ = optimize.curve_fit(mapping.normalized_intensity, h, mapping.i5_norm(h))
         Y0, A, h0 = popt
         print('Y0 = {:.2f}, A = {:.2f}, h0 = {:.2f}'.format(*popt))
 
-        return (self.l/(4*np.pi*self.n_outer)) * (np.arccos((Y0-img_normalized)/A) - 2*np.pi*self.p) + h0    
+        return (self.l/(4*np.pi*self.n_outer)) * (np.arccos((Y0 - RICM.background_normalization(self)) / A) - 2*np.pi*self.p) + h0    
     
     
     # RICM height mapping argument
     def height_argument(self, h=np.linspace(1, 600, 600)):
-        
-        # Normalized reflactance to the background
-        img_normalized =  RICM.background_normalization(self)
-        
 
         # Fit the parameters Y_0, A, h_0 of the cosine function
         mapping = Height_map(n_glass = self.n_glass,
@@ -286,10 +258,10 @@ class RICM(Height_map):
                              l       = self.l,
                              p       = self.p)
         
-        popt, pcov = optimize.curve_fit(mapping.normalized_intensity, h, mapping.i5_norm(h))
-        Y0, A, h0 = popt
+        popt, _ = optimize.curve_fit(mapping.normalized_intensity, h, mapping.i5_norm(h))
+        Y0, A, _ = popt
 
-        return (Y0-img_normalized)/A 
+        return (Y0 - RICM.background_normalization(self)) / A 
     
     
     # Display the way to the RICM height mapping step by step
@@ -399,44 +371,68 @@ class Growth_Area():
         # Background correction of the movie
         if self.background is None:
             background_correction = 0
-        else: background_correction = self.background.mean()-self.background
+        else: 
+            background_correction = self.background.mean()-self.background
 
-        # Consicutive denoising of the movie
-        movie_consecuted = Growth_Area.consecuted_movie(self) if self.consecute != None else self.movie
+        # Check if consecutivity is ordered
+        if self.consecute != None:
 
-        # Non local denoising of the movie
-        if self.denoise:
+            # Consicutive denoising of the movie
+            movie_consecuted = Growth_Area.consecuted_movie(self)
 
-            # Estimating the noise variance of the image
-            sigma_est = np.mean(restoration.estimate_sigma(movie_consecuted[-1]))
+            # Non local denoising of the movie
+            if self.denoise:
 
-            # Get the area of each frame in the averaged movie
-            movie_corrected = []
-            for img in movie_consecuted:
+                # Get the area of each frame in the averaged movie
+                movie_corrected = []
+                for img in movie_consecuted:
 
-                # Apply the Non-local means denoising algorithm on the background corrected image
-                img_corrected = restoration.denoise_nl_means(img + background_correction,
-                                                            h = sigma_est,
-                                                            fast_mode = self.nl_fast_mode,
-                                                            patch_size = self.nl_patch_size,
-                                                            patch_distance = self.nl_patch_distance)
+                    # Apply the Non-local means denoising algorithm on the background corrected image
+                    img_corrected = restoration.denoise_nl_means(img + background_correction,
+                                                                 h = np.mean(restoration.estimate_sigma(movie_consecuted[-1])),
+                                                                 fast_mode = self.nl_fast_mode,
+                                                                 patch_size = self.nl_patch_size,
+                                                                 patch_distance = self.nl_patch_distance)
 
-                # Corrected movie
-                movie_corrected.append(img_corrected)
+                    # Corrected movie
+                    movie_corrected.append(img_corrected)
 
-            movie_corrected = np.array(movie_corrected)
+                movie_corrected = np.array(movie_corrected)
 
-        else: movie_corrected = movie_consecuted + background_correction
+            else: 
+                movie_corrected = movie_consecuted + background_correction
+
+        else:
+
+            # Non local denoising of the movie
+            if self.denoise:
+
+                # Get the area of each frame in the averaged movie
+                movie_corrected = []
+                for img in self.movie:
+
+                    # Apply the Non-local means denoising algorithm on the background corrected image
+                    img_corrected = restoration.denoise_nl_means(img + background_correction,
+                                                                 h = np.mean(restoration.estimate_sigma(self.movie[-1])),
+                                                                 fast_mode = self.nl_fast_mode,
+                                                                 patch_size = self.nl_patch_size,
+                                                                 patch_distance = self.nl_patch_distance)
+
+                    # Corrected movie
+                    movie_corrected.append(img_corrected)
+
+                movie_corrected = np.array(movie_corrected)
+
+            else: 
+                movie_corrected = self.movie + background_correction
         
         
         if self.static_threshold:
             # Compute the threshold
             threshold = filters.threshold_otsu(movie_corrected[-20:-1].mean(axis = 0))
 
-            # Compute the area
-            area = np.array([(1-np.multiply(img > threshold, 1)).sum() for img in movie_corrected])
+            # Return the area
+            return np.array([(1-np.multiply(img > threshold, 1)).sum() for img in movie_corrected])
         else:
-            # Compute the area
-            area = np.array([(1-np.multiply(img > filters.threshold_otsu(img), 1)).sum() for img in movie_corrected])
-
-        return area
+            # Return the area computed with dynamic threshold
+            return np.array([(1-np.multiply(img > filters.threshold_otsu(img), 1)).sum() for img in movie_corrected])
