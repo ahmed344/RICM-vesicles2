@@ -138,7 +138,7 @@ class RICM(Height_map):
         # Check if denoising is True
         if self.denoise:
             # Return the edge of the denoised image
-            return filters.sobel(RICM.nl_denoise(self))
+            return filters.sobel(self.nl_denoise())
         else:
             # Return the edge of the original image
             return filters.sobel(self.img)
@@ -148,7 +148,7 @@ class RICM(Height_map):
     def mask(self):
 
         #Applying some edge operators to the denoised image
-        edge = RICM.edge_detection(self)
+        edge = self.edge_detection()
         
         # 1- Getting the threshold of edge filtered image
         # 2- Making a binary image with 0 and 1 values
@@ -168,7 +168,7 @@ class RICM(Height_map):
     def background_fitting(self):
 
         # Determine the contact zone
-        edge_binary_filled = RICM.mask(self)
+        edge_binary_filled = self.mask()
 
         # Write the data in terms of 3-dim points excluding the contact zone
         coord_background_intensity = []
@@ -199,20 +199,20 @@ class RICM(Height_map):
     def correct(self):
 
         # Fitting the background
-        Background = RICM.background_fitting(self)
+        Background = self.background_fitting()
         
         # Return the corrected image
         return self.img - Background + np.average(Background)
 
     
     # Normalized reflactance to the background
-    def background_normalization(self):
+    def background_normalization():
 
         # Get the corrected image
-        img_corrected = RICM.correct(self)
+        img_corrected = self.correct()
 
         # Get the background by removing the contact zone from the corrected image
-        corrected_background = img_corrected * (1 - RICM.mask(self))
+        corrected_background = img_corrected * (1 - self.mask())
 
         # Transform it into a histogram excluding the contact zone
         corrected_background = corrected_background[corrected_background != 0].ravel()
@@ -241,7 +241,7 @@ class RICM(Height_map):
         Y0, A, h0 = popt
         print('Y0 = {:.2f}, A = {:.2f}, h0 = {:.2f}'.format(*popt))
 
-        return (self.l/(4*np.pi*self.n_outer)) * (np.arccos((Y0 - RICM.background_normalization(self)) / A) - 2*np.pi*self.p) + h0    
+        return (self.l/(4*np.pi*self.n_outer)) * (np.arccos((Y0 - self.background_normalization(self)) / A) - 2*np.pi*self.p) + h0    
     
     
     # RICM height mapping argument
@@ -261,7 +261,7 @@ class RICM(Height_map):
         popt, _ = optimize.curve_fit(mapping.normalized_intensity, h, mapping.i5_norm(h))
         Y0, A, _ = popt
 
-        return (Y0 - RICM.background_normalization(self)) / A 
+        return (Y0 - self.background_normalization(self)) / A 
     
     
     # Display the way to the RICM height mapping step by step
@@ -278,13 +278,13 @@ class RICM(Height_map):
         plt.subplot(242)
         plt.axis('off')
         plt.title('Denoised image')
-        plt.imshow(RICM.nl_denoise(self) , cmap = 'gray')
+        plt.imshow(self.nl_denoise() , cmap = 'gray')
         plt.colorbar()
 
         plt.subplot(243)
         plt.axis('off')
         plt.title('Edge detected image')
-        plt.imshow(RICM.edge_detection(self) , cmap = 'gray')
+        plt.imshow(self.edge_detection() , cmap = 'gray')
         plt.colorbar();
 
         plt.subplot(244)
@@ -295,24 +295,24 @@ class RICM(Height_map):
         plt.subplot(245)
         plt.axis('off')
         plt.title('Masked image')
-        plt.imshow(RICM.mask(self) , cmap = 'gray')
+        plt.imshow(self.mask() , cmap = 'gray')
         plt.colorbar();
 
         plt.subplot(246)
         plt.axis('off')
         plt.title('Background fitted image')
-        plt.imshow(RICM.background_fitting(self) , cmap = 'gray')
+        plt.imshow(self.background_fitting() , cmap = 'gray')
         plt.colorbar();
 
         plt.subplot(247)
         plt.axis('off')
         plt.title('Corrected image')
-        plt.imshow(RICM.correct(self) , cmap = 'gray')
+        plt.imshow(self.correct() , cmap = 'gray')
         plt.colorbar()
         
         plt.subplot(248)
         plt.title('Corrected histogram')
-        plt.hist(RICM.correct(self).ravel(), bins = 200)
+        plt.hist(self.correct().ravel(), bins = 200)
         plt.grid();
         
         # Save the image
@@ -366,6 +366,74 @@ class Growth_Area():
         
         return movie_consecuted
 
+    def movie_threshold(self, movie, background_correction=0):
+        movie_corrected = []
+        for img in movie[-20:-1]:
+
+            # Apply the Non-local means denoising algorithm on the background corrected image
+            img_corrected = restoration.denoise_nl_means(img + background_correction,
+                                                            h = np.mean(restoration.estimate_sigma(movie[-1])),
+                                                            fast_mode = self.nl_fast_mode,
+                                                            patch_size = self.nl_patch_size,
+                                                            patch_distance = self.nl_patch_distance)
+
+            # Corrected movie
+            movie_corrected.append(img_corrected)
+        
+        return filters.threshold_otsu(np.mean(movie_corrected, axis = 0))
+
+    def movie_to_area(self, movie, background_correction=0, threshold=False, denoise=True):
+        if threshold:
+            # Compute a static threshold for the whole movie
+            th = self.movie_threshold(movie, background_correction)
+
+            # Non local denoising of the movie
+            if denoise:
+
+                # Get the area of each denoised frame in the movie
+                area = []
+                for img in movie:
+
+                    # Apply the Non-local means denoising algorithm on the background corrected image
+                    img_corrected = restoration.denoise_nl_means(img + background_correction,
+                                                                 h = np.mean(restoration.estimate_sigma(movie[-1])),
+                                                                 fast_mode = self.nl_fast_mode,
+                                                                 patch_size = self.nl_patch_size,
+                                                                 patch_distance = self.nl_patch_distance)
+
+                    # save the area
+                    area.append((1-np.multiply(img_corrected > th, 1)).sum())
+
+                return np.array(area)
+
+            else: 
+                return np.array([(1-np.multiply(img > th, 1)).sum() for img in movie + background_correction])
+
+        else:
+            # Non local denoising of the movie
+            if denoise:
+
+                # Get the area of each denoised frame in the movie
+                area = []
+                for img in movie:
+
+                    # Apply the Non-local means denoising algorithm on the background corrected image
+                    img_corrected = restoration.denoise_nl_means(img + background_correction,
+                                                                 h = np.mean(restoration.estimate_sigma(movie[-1])),
+                                                                 fast_mode = self.nl_fast_mode,
+                                                                 patch_size = self.nl_patch_size,
+                                                                 patch_distance = self.nl_patch_distance)
+
+                    # save the area
+                    area.append((1-np.multiply(img_corrected > filters.threshold_otsu(img_corrected), 1)).sum())
+
+                return np.array(area)
+
+            else: 
+                return np.array([(1-np.multiply(img > filters.threshold_otsu(img), 1)).sum() for img in movie + background_correction])
+
+
+
     def area_curve(self):
 
         # Background correction of the movie
@@ -380,59 +448,9 @@ class Growth_Area():
             # Consicutive denoising of the movie
             movie_consecuted = Growth_Area.consecuted_movie(self)
 
-            # Non local denoising of the movie
-            if self.denoise:
-
-                # Get the area of each frame in the averaged movie
-                movie_corrected = []
-                for img in movie_consecuted:
-
-                    # Apply the Non-local means denoising algorithm on the background corrected image
-                    img_corrected = restoration.denoise_nl_means(img + background_correction,
-                                                                 h = np.mean(restoration.estimate_sigma(movie_consecuted[-1])),
-                                                                 fast_mode = self.nl_fast_mode,
-                                                                 patch_size = self.nl_patch_size,
-                                                                 patch_distance = self.nl_patch_distance)
-
-                    # Corrected movie
-                    movie_corrected.append(img_corrected)
-
-                movie_corrected = np.array(movie_corrected)
-
-            else: 
-                movie_corrected = movie_consecuted + background_correction
+            # Extract the area from the consecuted movie
+            return self.movie_to_area(movie_consecuted, background_correction, self.static_threshold, self.denoise)
 
         else:
-
-            # Non local denoising of the movie
-            if self.denoise:
-
-                # Get the area of each frame in the averaged movie
-                movie_corrected = []
-                for img in self.movie:
-
-                    # Apply the Non-local means denoising algorithm on the background corrected image
-                    img_corrected = restoration.denoise_nl_means(img + background_correction,
-                                                                 h = np.mean(restoration.estimate_sigma(self.movie[-1])),
-                                                                 fast_mode = self.nl_fast_mode,
-                                                                 patch_size = self.nl_patch_size,
-                                                                 patch_distance = self.nl_patch_distance)
-
-                    # Corrected movie
-                    movie_corrected.append(img_corrected)
-
-                movie_corrected = np.array(movie_corrected)
-
-            else: 
-                movie_corrected = self.movie + background_correction
-        
-        
-        if self.static_threshold:
-            # Compute the threshold
-            threshold = filters.threshold_otsu(movie_corrected[-20:-1].mean(axis = 0))
-
-            # Return the area
-            return np.array([(1-np.multiply(img > threshold, 1)).sum() for img in movie_corrected])
-        else:
-            # Return the area computed with dynamic threshold
-            return np.array([(1-np.multiply(img > filters.threshold_otsu(img), 1)).sum() for img in movie_corrected])
+            # Extract the area from the original movie
+            return self.movie_to_area(self.movie, background_correction, self.static_threshold, self.denoise)
